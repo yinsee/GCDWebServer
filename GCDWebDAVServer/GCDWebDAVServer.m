@@ -55,11 +55,16 @@ typedef NS_ENUM(NSInteger, DAVProperties) {
 @private
   NSString* _uploadDirectory;
   NSArray* _allowedExtensions;
-  BOOL _showHidden;
+  BOOL _allowHidden;
 }
 @end
 
 @implementation GCDWebDAVServer (Methods)
+
+// Must match implementation in GCDWebUploader
+- (BOOL)_checkSandboxedPath:(NSString*)path {
+  return [[path stringByStandardizingPath] hasPrefix:_uploadDirectory];
+}
 
 - (BOOL)_checkFileExtension:(NSString*)fileName {
   if (_allowedExtensions && ![_allowedExtensions containsObject:[[fileName pathExtension] lowercaseString]]) {
@@ -87,12 +92,12 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   NSString* relativePath = request.path;
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
   BOOL isDirectory = NO;
-  if (![absolutePath hasPrefix:_uploadDirectory] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
+  if (![self _checkSandboxedPath:absolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   
   NSString* itemName = [absolutePath lastPathComponent];
-  if (([itemName hasPrefix:@"."] && !_showHidden) || (!isDirectory && ![self _checkFileExtension:itemName])) {
+  if (([itemName hasPrefix:@"."] && !_allowHidden) || (!isDirectory && ![self _checkFileExtension:itemName])) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Downlading item name \"%@\" is not allowed", itemName];
   }
   
@@ -116,7 +121,7 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   
   NSString* relativePath = request.path;
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
-  if (![absolutePath hasPrefix:_uploadDirectory]) {
+  if (![self _checkSandboxedPath:absolutePath]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   BOOL isDirectory;
@@ -130,7 +135,7 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   }
   
   NSString* fileName = [absolutePath lastPathComponent];
-  if (([fileName hasPrefix:@"."] && !_showHidden) || ![self _checkFileExtension:fileName]) {
+  if (([fileName hasPrefix:@"."] && !_allowHidden) || ![self _checkFileExtension:fileName]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Uploading file name \"%@\" is not allowed", fileName];
   }
   
@@ -161,12 +166,12 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   NSString* relativePath = request.path;
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
   BOOL isDirectory = NO;
-  if (![absolutePath hasPrefix:_uploadDirectory] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
+  if (![self _checkSandboxedPath:absolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   
   NSString* itemName = [absolutePath lastPathComponent];
-  if (([itemName hasPrefix:@"."] && !_showHidden) || (!isDirectory && ![self _checkFileExtension:itemName])) {
+  if (([itemName hasPrefix:@"."] && !_allowHidden) || (!isDirectory && ![self _checkFileExtension:itemName])) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Deleting item name \"%@\" is not allowed", itemName];
   }
   
@@ -194,7 +199,7 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   
   NSString* relativePath = request.path;
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
-  if (![absolutePath hasPrefix:_uploadDirectory]) {
+  if (![self _checkSandboxedPath:absolutePath]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   BOOL isDirectory;
@@ -203,7 +208,7 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   }
   
   NSString* directoryName = [absolutePath lastPathComponent];
-  if (!_showHidden && [directoryName hasPrefix:@"."]) {
+  if (!_allowHidden && [directoryName hasPrefix:@"."]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Creating directory name \"%@\" is not allowed", directoryName];
   }
   
@@ -243,7 +248,7 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   
   NSString* srcRelativePath = request.path;
   NSString* srcAbsolutePath = [_uploadDirectory stringByAppendingPathComponent:srcRelativePath];
-  if (![srcAbsolutePath hasPrefix:_uploadDirectory]) {
+  if (![self _checkSandboxedPath:srcAbsolutePath]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", srcRelativePath];
   }
   
@@ -254,7 +259,7 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   }
   dstRelativePath = [[dstRelativePath substringFromIndex:(range.location + range.length)] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
   NSString* dstAbsolutePath = [_uploadDirectory stringByAppendingPathComponent:dstRelativePath];
-  if (![dstAbsolutePath hasPrefix:_uploadDirectory]) {
+  if (![self _checkSandboxedPath:dstAbsolutePath]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", srcRelativePath];
   }
   
@@ -264,7 +269,7 @@ static inline BOOL _IsMacFinder(GCDWebServerRequest* request) {
   }
   
   NSString* itemName = [dstAbsolutePath lastPathComponent];
-  if ((!_showHidden && [itemName hasPrefix:@"."]) || (!isDirectory && ![self _checkFileExtension:itemName])) {
+  if ((!_allowHidden && [itemName hasPrefix:@"."]) || (!isDirectory && ![self _checkFileExtension:itemName])) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"%@ to item name \"%@\" is not allowed", isMove ? @"Moving" : @"Copying", itemName];
   }
   
@@ -425,12 +430,12 @@ static inline xmlNodePtr _XMLChildWithName(xmlNodePtr child, const xmlChar* name
   NSString* relativePath = request.path;
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
   BOOL isDirectory = NO;
-  if (![absolutePath hasPrefix:_uploadDirectory] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
+  if (![self _checkSandboxedPath:absolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   
   NSString* itemName = [absolutePath lastPathComponent];
-  if (([itemName hasPrefix:@"."] && !_showHidden) || (!isDirectory && ![self _checkFileExtension:itemName])) {
+  if (([itemName hasPrefix:@"."] && !_allowHidden) || (!isDirectory && ![self _checkFileExtension:itemName])) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Retrieving properties for item name \"%@\" is not allowed", itemName];
   }
   
@@ -454,7 +459,7 @@ static inline xmlNodePtr _XMLChildWithName(xmlNodePtr child, const xmlChar* name
       relativePath = [relativePath stringByAppendingString:@"/"];
     }
     for (NSString* item in items) {
-      if (_showHidden || ![item hasPrefix:@"."]) {
+      if (_allowHidden || ![item hasPrefix:@"."]) {
         [self _addPropertyResponseForItem:[absolutePath stringByAppendingPathComponent:item] resource:[relativePath stringByAppendingString:item] properties:properties xmlString:xmlString];
       }
     }
@@ -475,7 +480,7 @@ static inline xmlNodePtr _XMLChildWithName(xmlNodePtr child, const xmlChar* name
   NSString* relativePath = request.path;
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
   BOOL isDirectory = NO;
-  if (![absolutePath hasPrefix:_uploadDirectory] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
+  if (![self _checkSandboxedPath:absolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   
@@ -525,7 +530,7 @@ static inline xmlNodePtr _XMLChildWithName(xmlNodePtr child, const xmlChar* name
   }
   
   NSString* itemName = [absolutePath lastPathComponent];
-  if ((!_showHidden && [itemName hasPrefix:@"."]) || (!isDirectory && ![self _checkFileExtension:itemName])) {
+  if ((!_allowHidden && [itemName hasPrefix:@"."]) || (!isDirectory && ![self _checkFileExtension:itemName])) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Locking item name \"%@\" is not allowed", itemName];
   }
   
@@ -575,7 +580,7 @@ static inline xmlNodePtr _XMLChildWithName(xmlNodePtr child, const xmlChar* name
   NSString* relativePath = request.path;
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
   BOOL isDirectory = NO;
-  if (![absolutePath hasPrefix:_uploadDirectory] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
+  if (![self _checkSandboxedPath:absolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   
@@ -585,7 +590,7 @@ static inline xmlNodePtr _XMLChildWithName(xmlNodePtr child, const xmlChar* name
   }
   
   NSString* itemName = [absolutePath lastPathComponent];
-  if ((!_showHidden && [itemName hasPrefix:@"."]) || (!isDirectory && ![self _checkFileExtension:itemName])) {
+  if ((!_allowHidden && [itemName hasPrefix:@"."]) || (!isDirectory && ![self _checkFileExtension:itemName])) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Unlocking item name \"%@\" is not allowed", itemName];
   }
   
@@ -597,7 +602,7 @@ static inline xmlNodePtr _XMLChildWithName(xmlNodePtr child, const xmlChar* name
 
 @implementation GCDWebDAVServer
 
-@synthesize uploadDirectory=_uploadDirectory, allowedFileExtensions=_allowedExtensions, showHiddenFiles=_showHidden;
+@synthesize uploadDirectory=_uploadDirectory, allowedFileExtensions=_allowedExtensions, allowHiddenItems=_allowHidden;
 
 - (instancetype)initWithUploadDirectory:(NSString*)path {
   if ((self = [super init])) {

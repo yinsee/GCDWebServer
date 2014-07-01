@@ -23,6 +23,12 @@ function runTests {
   rm -rf "$PAYLOAD_DIR"
   ditto -x -k "$PAYLOAD_ZIP" "$PAYLOAD_DIR"
   TZ=GMT find "$PAYLOAD_DIR" -type d -exec SetFile -d "1/1/2014 00:00:00" -m "1/1/2014 00:00:00" '{}' \;  # ZIP archives do not preserve directories dates
+  if [ "$4" != "" ]; then
+    cp -f "$4" "$PAYLOAD_DIR/Payload"
+    pushd "$PAYLOAD_DIR/Payload"
+    SetFile -d "1/1/2014 00:00:00" -m "1/1/2014 00:00:00" `basename "$4"`
+    popd
+  fi
   logLevel=2 $1 -mode "$2" -root "$PAYLOAD_DIR/Payload" -tests "$3"
 }
 
@@ -43,6 +49,10 @@ rm -rf "$ARC_BUILD_DIR"
 xcodebuild -sdk "$OSX_SDK" -target "$OSX_TARGET" -configuration "$CONFIGURATION" build "SYMROOT=$ARC_BUILD_DIR" "CLANG_ENABLE_OBJC_ARC=YES" > /dev/null
 
 # Run tests
+runTests $MRC_PRODUCT "htmlForm" "Tests/HTMLForm"
+runTests $ARC_PRODUCT "htmlForm" "Tests/HTMLForm"
+runTests $MRC_PRODUCT "htmlFileUpload" "Tests/HTMLFileUpload"
+runTests $ARC_PRODUCT "htmlFileUpload" "Tests/HTMLFileUpload"
 runTests $MRC_PRODUCT "webServer" "Tests/WebServer"
 runTests $ARC_PRODUCT "webServer" "Tests/WebServer"
 runTests $MRC_PRODUCT "webDAV" "Tests/WebDAV-Transmit"
@@ -53,6 +63,8 @@ runTests $MRC_PRODUCT "webDAV" "Tests/WebDAV-Finder"
 runTests $ARC_PRODUCT "webDAV" "Tests/WebDAV-Finder"
 runTests $MRC_PRODUCT "webUploader" "Tests/WebUploader"
 runTests $ARC_PRODUCT "webUploader" "Tests/WebUploader"
+runTests $MRC_PRODUCT "webServer" "Tests/WebServer-Sample-Movie" "Tests/Sample-Movie.mp4"
+runTests $ARC_PRODUCT "webServer" "Tests/WebServer-Sample-Movie" "Tests/Sample-Movie.mp4"
 
 # Done
 echo "\nAll tests completed successfully!"

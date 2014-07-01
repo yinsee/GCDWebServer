@@ -46,7 +46,7 @@
 @private
   NSString* _uploadDirectory;
   NSArray* _allowedExtensions;
-  BOOL _showHidden;
+  BOOL _allowHidden;
   NSString* _title;
   NSString* _header;
   NSString* _prologue;
@@ -56,6 +56,11 @@
 @end
 
 @implementation GCDWebUploader (Methods)
+
+// Must match implementation in GCDWebDAVServer
+- (BOOL)_checkSandboxedPath:(NSString*)path {
+  return [[path stringByStandardizingPath] hasPrefix:_uploadDirectory];
+}
 
 - (BOOL)_checkFileExtension:(NSString*)fileName {
   if (_allowedExtensions && ![_allowedExtensions containsObject:[[fileName pathExtension] lowercaseString]]) {
@@ -85,8 +90,8 @@
 - (GCDWebServerResponse*)listDirectory:(GCDWebServerRequest*)request {
   NSString* relativePath = [[request query] objectForKey:@"path"];
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
-  BOOL isDirectory;
-  if (![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
+  BOOL isDirectory = NO;
+  if (![self _checkSandboxedPath:absolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   if (!isDirectory) {
@@ -94,7 +99,7 @@
   }
   
   NSString* directoryName = [absolutePath lastPathComponent];
-  if (!_showHidden && [directoryName hasPrefix:@"."]) {
+  if (!_allowHidden && [directoryName hasPrefix:@"."]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Listing directory name \"%@\" is not allowed", directoryName];
   }
   
@@ -106,7 +111,7 @@
   
   NSMutableArray* array = [NSMutableArray array];
   for (NSString* item in [contents sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) {
-    if (_showHidden || ![item hasPrefix:@"."]) {
+    if (_allowHidden || ![item hasPrefix:@"."]) {
       NSDictionary* attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:[absolutePath stringByAppendingPathComponent:item] error:NULL];
       NSString* type = [attributes objectForKey:NSFileType];
       if ([type isEqualToString:NSFileTypeRegular] && [self _checkFileExtension:item]) {
@@ -129,8 +134,8 @@
 - (GCDWebServerResponse*)downloadFile:(GCDWebServerRequest*)request {
   NSString* relativePath = [[request query] objectForKey:@"path"];
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
-  BOOL isDirectory;
-  if (![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
+  BOOL isDirectory = NO;
+  if (![self _checkSandboxedPath:absolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   if (isDirectory) {
@@ -138,7 +143,7 @@
   }
   
   NSString* fileName = [absolutePath lastPathComponent];
-  if (([fileName hasPrefix:@"."] && !_showHidden) || ![self _checkFileExtension:fileName]) {
+  if (([fileName hasPrefix:@"."] && !_allowHidden) || ![self _checkFileExtension:fileName]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Downlading file name \"%@\" is not allowed", fileName];
   }
   
@@ -154,12 +159,15 @@
   NSRange range = [[request.headers objectForKey:@"Accept"] rangeOfString:@"application/json" options:NSCaseInsensitiveSearch];
   NSString* contentType = (range.location != NSNotFound ? @"application/json" : @"text/plain; charset=utf-8");  // Required when using iFrame transport (see https://github.com/blueimp/jQuery-File-Upload/wiki/Setup)
   
-  GCDWebServerMultiPartFile* file = [request.files objectForKey:@"files[]"];
-  if ((!_showHidden && [file.fileName hasPrefix:@"."]) || ![self _checkFileExtension:file.fileName]) {
+  GCDWebServerMultiPartFile* file = [request firstFileForControlName:@"files[]"];
+  if ((!_allowHidden && [file.fileName hasPrefix:@"."]) || ![self _checkFileExtension:file.fileName]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Uploaded file name \"%@\" is not allowed", file.fileName];
   }
-  NSString* relativePath = [(GCDWebServerMultiPartArgument*)[request.arguments objectForKey:@"path"] string];
+  NSString* relativePath = [[request firstArgumentForControlName:@"path"] string];
   NSString* absolutePath = [self _uniquePathForPath:[[_uploadDirectory stringByAppendingPathComponent:relativePath] stringByAppendingPathComponent:file.fileName]];
+  if (![self _checkSandboxedPath:absolutePath]) {
+    return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
+  }
   
   if (![self shouldUploadFileAtPath:absolutePath withTemporaryFile:file.temporaryPath]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Uploading file \"%@\" to \"%@\" is not permitted", file.fileName, relativePath];
@@ -181,16 +189,19 @@
 - (GCDWebServerResponse*)moveItem:(GCDWebServerURLEncodedFormRequest*)request {
   NSString* oldRelativePath = [request.arguments objectForKey:@"oldPath"];
   NSString* oldAbsolutePath = [_uploadDirectory stringByAppendingPathComponent:oldRelativePath];
-  BOOL isDirectory;
-  if (![[NSFileManager defaultManager] fileExistsAtPath:oldAbsolutePath isDirectory:&isDirectory]) {
+  BOOL isDirectory = NO;
+  if (![self _checkSandboxedPath:oldAbsolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:oldAbsolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", oldRelativePath];
   }
   
   NSString* newRelativePath = [request.arguments objectForKey:@"newPath"];
   NSString* newAbsolutePath = [self _uniquePathForPath:[_uploadDirectory stringByAppendingPathComponent:newRelativePath]];
+  if (![self _checkSandboxedPath:newAbsolutePath]) {
+    return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", newRelativePath];
+  }
   
   NSString* itemName = [newAbsolutePath lastPathComponent];
-  if ((!_showHidden && [itemName hasPrefix:@"."]) || (!isDirectory && ![self _checkFileExtension:itemName])) {
+  if ((!_allowHidden && [itemName hasPrefix:@"."]) || (!isDirectory && ![self _checkFileExtension:itemName])) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Moving to item name \"%@\" is not allowed", itemName];
   }
   
@@ -215,12 +226,12 @@
   NSString* relativePath = [request.arguments objectForKey:@"path"];
   NSString* absolutePath = [_uploadDirectory stringByAppendingPathComponent:relativePath];
   BOOL isDirectory = NO;
-  if (![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
+  if (![self _checkSandboxedPath:absolutePath] || ![[NSFileManager defaultManager] fileExistsAtPath:absolutePath isDirectory:&isDirectory]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
   }
   
   NSString* itemName = [absolutePath lastPathComponent];
-  if (([itemName hasPrefix:@"."] && !_showHidden) || (!isDirectory && ![self _checkFileExtension:itemName])) {
+  if (([itemName hasPrefix:@"."] && !_allowHidden) || (!isDirectory && ![self _checkFileExtension:itemName])) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Deleting item name \"%@\" is not allowed", itemName];
   }
   
@@ -244,9 +255,12 @@
 - (GCDWebServerResponse*)createDirectory:(GCDWebServerURLEncodedFormRequest*)request {
   NSString* relativePath = [request.arguments objectForKey:@"path"];
   NSString* absolutePath = [self _uniquePathForPath:[_uploadDirectory stringByAppendingPathComponent:relativePath]];
+  if (![self _checkSandboxedPath:absolutePath]) {
+    return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_NotFound message:@"\"%@\" does not exist", relativePath];
+  }
   
   NSString* directoryName = [absolutePath lastPathComponent];
-  if (!_showHidden && [directoryName hasPrefix:@"."]) {
+  if (!_allowHidden && [directoryName hasPrefix:@"."]) {
     return [GCDWebServerErrorResponse responseWithClientError:kGCDWebServerHTTPStatusCode_Forbidden message:@"Creating directory name \"%@\" is not allowed", directoryName];
   }
   
@@ -271,7 +285,7 @@
 
 @implementation GCDWebUploader
 
-@synthesize uploadDirectory=_uploadDirectory, allowedFileExtensions=_allowedExtensions, showHiddenFiles=_showHidden,
+@synthesize uploadDirectory=_uploadDirectory, allowedFileExtensions=_allowedExtensions, allowHiddenItems=_allowHidden,
             title=_title, header=_header, prologue=_prologue, epilogue=_epilogue, footer=_footer;
 
 - (instancetype)initWithUploadDirectory:(NSString*)path {

@@ -31,6 +31,7 @@
 #else
 #import <SystemConfiguration/SystemConfiguration.h>
 #endif
+#import <CommonCrypto/CommonDigest.h>
 
 #import <ifaddrs.h>
 #import <net/if.h>
@@ -42,8 +43,7 @@ static NSDateFormatter* _dateFormatterRFC822 = nil;
 static NSDateFormatter* _dateFormatterISO8601 = nil;
 static dispatch_queue_t _dateFormatterQueue = NULL;
 
-// HTTP/1.1 server must use RFC822
-// TODO: Handle RFC 850 and ANSI C's asctime() format (http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.3)
+// TODO: Handle RFC 850 and ANSI C's asctime() format
 void GCDWebServerInitializeFunctions() {
   DCHECK([NSThread isMainThread]);  // NSDateFormatter should be initialized on main thread
   if (_dateFormatterRFC822 == nil) {
@@ -79,13 +79,11 @@ NSString* GCDWebServerNormalizeHeaderValue(NSString* value) {
 }
 
 NSString* GCDWebServerTruncateHeaderValue(NSString* value) {
-  DCHECK([value isEqualToString:GCDWebServerNormalizeHeaderValue(value)]);
   NSRange range = [value rangeOfString:@";"];
   return range.location != NSNotFound ? [value substringToIndex:range.location] : value;
 }
 
 NSString* GCDWebServerExtractHeaderValueParameter(NSString* value, NSString* name) {
-  DCHECK([value isEqualToString:GCDWebServerNormalizeHeaderValue(value)]);
   NSString* parameter = nil;
   NSScanner* scanner = [[NSScanner alloc] initWithString:value];
   [scanner setCaseSensitive:NO];  // Assume parameter names are case-insensitive
@@ -188,7 +186,6 @@ NSString* GCDWebServerUnescapeURLString(NSString* string) {
   return ARC_BRIDGE_RELEASE(CFURLCreateStringByReplacingPercentEscapesUsingEncoding(kCFAllocatorDefault, (CFStringRef)string, CFSTR(""), kCFStringEncodingUTF8));
 }
 
-// http://www.w3.org/TR/html401/interact/forms.html#h-17.13.4.1
 NSDictionary* GCDWebServerParseURLEncodedForm(NSString* form) {
   NSMutableDictionary* parameters = [NSMutableDictionary dictionary];
   NSScanner* scanner = [[NSScanner alloc] initWithString:form];
@@ -201,8 +198,9 @@ NSDictionary* GCDWebServerParseURLEncodedForm(NSString* form) {
     [scanner setScanLocation:([scanner scanLocation] + 1)];
     
     NSString* value = nil;
-    if (![scanner scanUpToString:@"&" intoString:&value]) {
-      break;
+    [scanner scanUpToString:@"&" intoString:&value];
+    if (value == nil) {
+      value = @"";
     }
     
     key = [key stringByReplacingOccurrencesOfString:@"+" withString:@" "];
@@ -265,4 +263,23 @@ NSString* GCDWebServerGetPrimaryIPv4Address() {
     freeifaddrs(list);
   }
   return address;
+}
+
+NSString* GCDWebServerComputeMD5Digest(NSString* format, ...) {
+  va_list arguments;
+  va_start(arguments, format);
+  const char* string = [ARC_AUTORELEASE([[NSString alloc] initWithFormat:format arguments:arguments]) UTF8String];
+  va_end(arguments);
+  unsigned char md5[CC_MD5_DIGEST_LENGTH];
+  CC_MD5(string, (CC_LONG)strlen(string), md5);
+  char buffer[2 * CC_MD5_DIGEST_LENGTH + 1];
+  for (int i = 0; i < CC_MD5_DIGEST_LENGTH; ++i) {
+    unsigned char byte = md5[i];
+    unsigned char byteHi = (byte & 0xF0) >> 4;
+    buffer[2 * i + 0] = byteHi >= 10 ? 'a' + byteHi - 10 : '0' + byteHi;
+    unsigned char byteLo = byte & 0x0F;
+    buffer[2 * i + 1] = byteLo >= 10 ? 'a' + byteLo - 10 : '0' + byteLo;
+  }
+  buffer[2 * CC_MD5_DIGEST_LENGTH] = 0;
+  return [NSString stringWithUTF8String:buffer];
 }

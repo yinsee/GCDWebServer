@@ -67,7 +67,7 @@
 #import "GCDWebServerDataResponse.h"
 #import "GCDWebServerErrorResponse.h"
 #import "GCDWebServerFileResponse.h"
-#import "GCDWebServerStreamingResponse.h"
+#import "GCDWebServerStreamedResponse.h"
 
 #ifdef __GCDWEBSERVER_LOGGING_HEADER__
 
@@ -111,7 +111,11 @@ extern void GCDLogMessage(GCDWebServerLogLevel level, NSString* format, ...) NS_
 #define kGCDWebServerErrorDomain @"GCDWebServerErrorDomain"
 
 static inline BOOL GCDWebServerIsValidByteRange(NSRange range) {
-  return ((range.location != NSNotFound) || (range.length > 0));
+  return ((range.location != NSUIntegerMax) || (range.length > 0));
+}
+
+static inline NSError* GCDWebServerMakePosixError(int code) {
+  return [NSError errorWithDomain:NSPOSIXErrorDomain code:code userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:strerror(code)]}];
 }
 
 extern void GCDWebServerInitializeFunctions();
@@ -121,6 +125,7 @@ extern NSString* GCDWebServerExtractHeaderValueParameter(NSString* header, NSStr
 extern NSStringEncoding GCDWebServerStringEncodingFromCharset(NSString* charset);
 extern BOOL GCDWebServerIsTextContentType(NSString* type);
 extern NSString* GCDWebServerDescribeData(NSData* data, NSString* contentType);
+extern NSString* GCDWebServerComputeMD5Digest(NSString* format, ...) NS_FORMAT_FUNCTION(1,2);
 
 @interface GCDWebServerConnection ()
 - (id)initWithServer:(GCDWebServer*)server localAddress:(NSData*)localAddress remoteAddress:(NSData*)remoteAddress socket:(CFSocketNativeHandle)socket;
@@ -130,7 +135,8 @@ extern NSString* GCDWebServerDescribeData(NSData* data, NSString* contentType);
 @property(nonatomic, readonly) NSArray* handlers;
 @property(nonatomic, readonly) NSString* serverName;
 @property(nonatomic, readonly) NSString* authenticationRealm;
-@property(nonatomic, readonly) NSString* authenticationBasicAccount;
+@property(nonatomic, readonly) NSDictionary* authenticationBasicAccounts;
+@property(nonatomic, readonly) NSDictionary* authenticationDigestAccounts;
 @property(nonatomic, readonly) BOOL shouldAutomaticallyMapHEADToGET;
 - (void)willStartConnection:(GCDWebServerConnection*)connection;
 - (void)didEndConnection:(GCDWebServerConnection*)connection;

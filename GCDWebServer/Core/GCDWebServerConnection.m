@@ -48,6 +48,7 @@ static NSData* _CRLFData = nil;
 static NSData* _CRLFCRLFData = nil;
 static NSData* _continueData = nil;
 static NSData* _lastChunkData = nil;
+static NSString* _digestAuthenticationNonce = nil;
 #ifdef __GCDWEBSERVER_ENABLE_TESTING__
 static int32_t _connectionCounter = 0;
 #endif
@@ -357,6 +358,11 @@ static inline NSUInteger _ScanHexNumber(const void* bytes, NSUInteger size) {
   if (_lastChunkData == nil) {
     _lastChunkData = [[NSData alloc] initWithBytes:"0\r\n\r\n" length:5];
   }
+  if (_digestAuthenticationNonce == nil) {
+    CFUUIDRef uuid = CFUUIDCreate(kCFAllocatorDefault);
+    _digestAuthenticationNonce = ARC_RETAIN(GCDWebServerComputeMD5Digest(@"%@", ARC_BRIDGE_RELEASE(CFUUIDCreateString(kCFAllocatorDefault, uuid))));
+    CFRelease(uuid);
+  }
 }
 
 - (void)_initializeResponseHeadersWithStatusCode:(NSInteger)statusCode {
@@ -410,7 +416,7 @@ static inline NSUInteger _ScanHexNumber(const void* bytes, NSUInteger size) {
     if (_response.contentType != nil) {
       CFHTTPMessageSetHeaderFieldValue(_responseMessage, CFSTR("Content-Type"), (ARC_BRIDGE CFStringRef)GCDWebServerNormalizeHeaderValue(_response.contentType));
     }
-    if (_response.contentLength != NSNotFound) {
+    if (_response.contentLength != NSUIntegerMax) {
       CFHTTPMessageSetHeaderFieldValue(_responseMessage, CFSTR("Content-Length"), (ARC_BRIDGE CFStringRef)[NSString stringWithFormat:@"%lu", (unsigned long)_response.contentLength]);
     }
     if (_response.usesChunkedTransferEncoding) {
@@ -516,11 +522,15 @@ static inline NSUInteger _ScanHexNumber(const void* bytes, NSUInteger size) {
         requestMethod = @"GET";
         _virtualHEAD = YES;
       }
+      NSDictionary* requestHeaders = ARC_BRIDGE_RELEASE(CFHTTPMessageCopyAllHeaderFields(_requestMessage));  // Header names are case-insensitive but CFHTTPMessageCopyAllHeaderFields() will standardize the common ones
       NSURL* requestURL = ARC_BRIDGE_RELEASE(CFHTTPMessageCopyRequestURL(_requestMessage));
+      if (requestURL) {
+        requestURL = [self rewriteRequestURL:requestURL withMethod:requestMethod headers:requestHeaders];
+        DCHECK(requestURL);
+      }
       NSString* requestPath = requestURL ? GCDWebServerUnescapeURLString(ARC_BRIDGE_RELEASE(CFURLCopyPath((CFURLRef)requestURL))) : nil;  // Don't use -[NSURL path] which strips the ending slash
       NSString* queryString = requestURL ? ARC_BRIDGE_RELEASE(CFURLCopyQueryString((CFURLRef)requestURL, NULL)) : nil;  // Don't use -[NSURL query] to make sure query is not unescaped;
       NSDictionary* requestQuery = queryString ? GCDWebServerParseURLEncodedForm(queryString) : @{};
-      NSDictionary* requestHeaders = ARC_BRIDGE_RELEASE(CFHTTPMessageCopyAllHeaderFields(_requestMessage));  // Header names are case-insensitive but CFHTTPMessageCopyAllHeaderFields() will standardize the common ones
       if (requestMethod && requestURL && requestHeaders && requestPath && requestQuery) {
         for (_handler in _server.handlers) {
           _request = ARC_RETAIN(_handler.matchBlock(requestMethod, requestURL, requestHeaders, requestPath, requestQuery));
@@ -669,11 +679,11 @@ static NSString* _StringFromAddressData(NSData* data) {
     _connectionIndex = OSAtomicIncrement32(&_connectionCounter);
     
     _requestPath = ARC_RETAIN([NSTemporaryDirectory() stringByAppendingPathComponent:[[NSProcessInfo processInfo] globallyUniqueString]]);
-    _requestFD = open([_requestPath fileSystemRepresentation], O_CREAT | O_TRUNC | O_WRONLY);
+    _requestFD = open([_requestPath fileSystemRepresentation], O_CREAT | O_TRUNC | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     DCHECK(_requestFD > 0);
     
     _responsePath = ARC_RETAIN([NSTemporaryDirectory() stringByAppendingPathComponent:[[NSProcessInfo processInfo] globallyUniqueString]]);
-    _responseFD = open([_responsePath fileSystemRepresentation], O_CREAT | O_TRUNC | O_WRONLY);
+    _responseFD = open([_responsePath fileSystemRepresentation], O_CREAT | O_TRUNC | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     DCHECK(_responseFD > 0);
   }
 #endif
@@ -707,14 +717,56 @@ static NSString* _StringFromAddressData(NSData* data) {
 #endif
 }
 
+- (NSURL*)rewriteRequestURL:(NSURL*)url withMethod:(NSString*)method headers:(NSDictionary*)headers {
+  return url;
+}
+
+// https://tools.ietf.org/html/rfc2617
 - (GCDWebServerResponse*)preflightRequest:(GCDWebServerRequest*)request {
   LOG_DEBUG(@"Connection on socket %i preflighting request \"%@ %@\" with %lu bytes body", _socket, _virtualHEAD ? @"HEAD" : _request.method, _request.path, (unsigned long)_bytesRead);
   GCDWebServerResponse* response = nil;
-  if (_server.authenticationBasicAccount) {
+  if (_server.authenticationBasicAccounts) {
+    __block BOOL authenticated = NO;
     NSString* authorizationHeader = [request.headers objectForKey:@"Authorization"];
-    if (![authorizationHeader hasPrefix:@"Basic "] || ![[authorizationHeader substringFromIndex:6] isEqualToString:_server.authenticationBasicAccount]) {
+    if ([authorizationHeader hasPrefix:@"Basic "]) {
+      NSString* basicAccount = [authorizationHeader substringFromIndex:6];
+      [_server.authenticationBasicAccounts enumerateKeysAndObjectsUsingBlock:^(NSString* username, NSString* digest, BOOL* stop) {
+        if ([basicAccount isEqualToString:digest]) {
+          authenticated = YES;
+          *stop = YES;
+        }
+      }];
+    }
+    if (!authenticated) {
       response = [GCDWebServerResponse responseWithStatusCode:kGCDWebServerHTTPStatusCode_Unauthorized];
       [response setValue:[NSString stringWithFormat:@"Basic realm=\"%@\"", _server.authenticationRealm] forAdditionalHeader:@"WWW-Authenticate"];
+    }
+  } else if (_server.authenticationDigestAccounts) {
+    BOOL authenticated = NO;
+    BOOL isStaled = NO;
+    NSString* authorizationHeader = [request.headers objectForKey:@"Authorization"];
+    if ([authorizationHeader hasPrefix:@"Digest "]) {
+      NSString* realm = GCDWebServerExtractHeaderValueParameter(authorizationHeader, @"realm");
+      if ([realm isEqualToString:_server.authenticationRealm]) {
+        NSString* nonce = GCDWebServerExtractHeaderValueParameter(authorizationHeader, @"nonce");
+        if ([nonce isEqualToString:_digestAuthenticationNonce]) {
+          NSString* username = GCDWebServerExtractHeaderValueParameter(authorizationHeader, @"username");
+          NSString* uri = GCDWebServerExtractHeaderValueParameter(authorizationHeader, @"uri");
+          NSString* actualResponse = GCDWebServerExtractHeaderValueParameter(authorizationHeader, @"response");
+          NSString* ha1 = [_server.authenticationDigestAccounts objectForKey:username];
+          NSString* ha2 = GCDWebServerComputeMD5Digest(@"%@:%@", request.method, uri);  // We cannot use "request.path" as the query string is required
+          NSString* expectedResponse = GCDWebServerComputeMD5Digest(@"%@:%@:%@", ha1, _digestAuthenticationNonce, ha2);
+          if ([actualResponse isEqualToString:expectedResponse]) {
+            authenticated = YES;
+          }
+        } else if (nonce.length) {
+          isStaled = YES;
+        }
+      }
+    }
+    if (!authenticated) {
+      response = [GCDWebServerResponse responseWithStatusCode:kGCDWebServerHTTPStatusCode_Unauthorized];
+      [response setValue:[NSString stringWithFormat:@"Digest realm=\"%@\", nonce=\"%@\"%@", _server.authenticationRealm, _digestAuthenticationNonce, isStaled ? @", stale=TRUE" : @""] forAdditionalHeader:@"WWW-Authenticate"];  // TODO: Support Quality of Protection ("qop")
     }
   }
   return response;

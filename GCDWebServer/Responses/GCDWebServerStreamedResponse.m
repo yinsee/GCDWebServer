@@ -25,11 +25,43 @@
  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#import "GCDWebServerStreamingResponse.h"
+#import "GCDWebServerPrivate.h"
 
-typedef NSData* (^GCDWebServerStreamBlock)(NSError** error);
+@interface GCDWebServerStreamedResponse () {
+@private
+  GCDWebServerStreamingBlock _block;
+}
+@end
 
-@interface GCDWebServerStreamingResponse : GCDWebServerResponse
-+ (instancetype)responseWithContentType:(NSString*)type streamBlock:(GCDWebServerStreamBlock)block;
-- (instancetype)initWithContentType:(NSString*)type streamBlock:(GCDWebServerStreamBlock)block;  // Block must return empty NSData when done or nil on error and set the "error" argument accordingly
+@implementation GCDWebServerStreamedResponse
+
++ (instancetype)responseWithContentType:(NSString*)type streamBlock:(GCDWebServerStreamingBlock)block {
+  return ARC_AUTORELEASE([[[self class] alloc] initWithContentType:type streamBlock:block]);
+}
+
+- (instancetype)initWithContentType:(NSString*)type streamBlock:(GCDWebServerStreamingBlock)block {
+  if ((self = [super init])) {
+    _block = [block copy];
+    
+    self.contentType = type;
+  }
+  return self;
+}
+
+- (void)dealloc {
+  ARC_RELEASE(_block);
+  
+  ARC_DEALLOC(super);
+}
+
+- (NSData*)readData:(NSError**)error {
+  return _block(error);
+}
+
+- (NSString*)description {
+  NSMutableString* description = [NSMutableString stringWithString:[super description]];
+  [description appendString:@"\n\n<STREAM>"];
+  return description;
+}
+
 @end

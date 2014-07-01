@@ -2,11 +2,13 @@ Overview
 ========
 
 [![Build Status](https://travis-ci.org/swisspol/GCDWebServer.svg?branch=master)](https://travis-ci.org/swisspol/GCDWebServer)
+[![Version](http://cocoapod-badges.herokuapp.com/v/GCDWebServer/badge.png)](http://cocoadocs.org/docsets/GCDWebServer)
+[![Platform](http://cocoapod-badges.herokuapp.com/p/GCDWebServer/badge.png)](http://cocoadocs.org/docsets/GCDWebServer)
 
 GCDWebServer is a modern and lightweight GCD based HTTP 1.1 server designed to be embedded in OS X & iOS apps. It was written from scratch with the following goals in mind:
-* Easy to use and understand architecture with only 4 core classes: server, connection, request and response (see "Understanding GCDWebServer's Architecture" below)
-* Well designed API for easy integration and customization
-* Entirely built with an event-driven design using [Grand Central Dispatch](http://en.wikipedia.org/wiki/Grand_Central_Dispatch) for maximal performance and concurrency
+* Elegant and easy to use architecture with only 4 core classes: server, connection, request and response (see "Understanding GCDWebServer's Architecture" below)
+* Well designed API with fully documented headers for easy integration and customization
+* Entirely built with an event-driven design using [Grand Central Dispatch](http://en.wikipedia.org/wiki/Grand_Central_Dispatch) for best performance and concurrency
 * No dependencies on third-party source code
 * Available under a friendly [New BSD License](LICENSE)
 
@@ -17,8 +19,8 @@ Extra built-in features:
 * [Chunked transfer encoding](https://en.wikipedia.org/wiki/Chunked_transfer_encoding) for request and response HTTP bodies
 * [HTTP compression](https://en.wikipedia.org/wiki/HTTP_compression) with gzip for request and response HTTP bodies
 * [HTTP range](https://en.wikipedia.org/wiki/Byte_serving) support for requests of local files
+* [Basic](https://en.wikipedia.org/wiki/Basic_access_authentication) and [Digest Access](https://en.wikipedia.org/wiki/Digest_access_authentication) authentications for password protection
 * Automatically handle transitions between foreground, background and suspended modes in iOS apps
-* [Basic Authentication](https://en.wikipedia.org/wiki/Basic_access_authentication) for simple password protection
 
 Included extensions:
 * [GCDWebUploader](GCDWebUploader/GCDWebUploader.h): subclass of ```GCDWebServer``` that implements an interface for uploading and downloading files using a web browser
@@ -55,9 +57,33 @@ Hello World
 
 These code snippets show how to implement a custom HTTP server that runs on port 8080 and returns a "Hello World" HTML page to any request. Since GCDWebServer uses GCD blocks to handle requests, no subclassing or delegates are needed, which results in very clean code.
 
+**OS X Swift version (command line tool):**
+
+***webServer.swift***
+```swift
+import Foundation
+
+let webServer = GCDWebServer()
+
+webServer.addDefaultHandlerForMethod("GET", requestClass: GCDWebServerRequest.self) { request in
+    return GCDWebServerDataResponse(HTML:"<html><body><p>Hello World</p></body></html>")
+}
+
+webServer.runWithPort(8080, bonjourName: nil)
+
+println("Visit \(webServer.serverURL) in your web browser")
+```
+
+***WebServer-Bridging-Header.h***
+```objectivec
+#import "GCDWebServer.h"
+#import "GCDWebServerDataResponse.h"
+```
+
 **OS X version (command line tool):**
 ```objectivec
 #import "GCDWebServer.h"
+#import "GCDWebServerDataResponse.h"
 
 int main(int argc, const char* argv[]) {
   @autoreleasepool {
@@ -74,11 +100,10 @@ int main(int argc, const char* argv[]) {
       
     }];
     
-    // Use convenience method that runs server on port 8080 until SIGINT received (i.e. Ctrl-C in Terminal)
-    [webServer runWithPort:8080];
-    
-    // Destroy server (unnecessary if using ARC)
-    [webServer release];
+    // Use convenience method that runs server on port 8080
+    // until SIGINT (Ctrl-C in Terminal) or SIGTERM is received
+    [webServer runWithPort:8080 bonjourName:nil];
+    NSLog(@"Visit %@ in your web browser", webServer.serverURL);
     
   }
   return 0;
@@ -88,8 +113,14 @@ int main(int argc, const char* argv[]) {
 **iOS version:**
 ```objectivec
 #import "GCDWebServer.h"
+#import "GCDWebServerDataResponse.h"
 
-static GCDWebServer* _webServer = nil;  // This should really be an ivar of your application's delegate class
+@interface AppDelegate : NSObject <UIApplicationDelegate> {
+  GCDWebServer* _webServer;
+}
+@end
+
+@implementation AppDelegate
 
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
   
@@ -107,9 +138,12 @@ static GCDWebServer* _webServer = nil;  // This should really be an ivar of your
   
   // Start server on port 8080
   [_webServer startWithPort:8080 bonjourName:nil];
+  NSLog(@"Visit %@ in your web browser", _webServer.serverURL);
   
   return YES;
 }
+
+@end
 ```
 
 Web Based Uploads in iOS Apps
@@ -122,7 +156,12 @@ Simply instantiate and run a ```GCDWebUploader``` instance then visit ```http://
 ```objectivec
 #import "GCDWebUploader.h"
 
-static GCDWebUploader* _webUploader = nil;  // This should really be an ivar of your application's delegate class
+@interface AppDelegate : NSObject <UIApplicationDelegate> {
+  GCDWebUploader* _webUploader;
+}
+@end
+
+@implementation AppDelegate
 
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
   NSString* documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
@@ -131,6 +170,8 @@ static GCDWebUploader* _webUploader = nil;  // This should really be an ivar of 
   NSLog(@"Visit %@ in your web browser", _webUploader.serverURL);
   return YES;
 }
+
+@end
 ```
 
 WebDAV Server in iOS Apps
@@ -145,7 +186,12 @@ Simply instantiate and run a ```GCDWebDAVServer``` instance then connect to ```h
 ```objectivec
 #import "GCDWebDAVServer.h"
 
-static GCDWebDAVServer* _davServer = nil;  // This should really be an ivar of your application's delegate class
+@interface AppDelegate : NSObject <UIApplicationDelegate> {
+  GCDWebDAVServer* _davServer;
+}
+@end
+
+@implementation AppDelegate
 
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
   NSString* documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
@@ -154,6 +200,8 @@ static GCDWebDAVServer* _davServer = nil;  // This should really be an ivar of y
   NSLog(@"Visit %@ in your WebDAV client", _davServer.serverURL);
   return YES;
 }
+
+@end
 ```
 
 Serving a Static Website
@@ -170,7 +218,6 @@ int main(int argc, const char* argv[]) {
     GCDWebServer* webServer = [[GCDWebServer alloc] init];
     [webServer addGETHandlerForBasePath:@"/" directoryPath:NSHomeDirectory() indexFilename:nil cacheAge:3600 allowRangeRequests:YES];
     [webServer runWithPort:8080];
-    [webServer release];  // Remove if using ARC
     
   }
   return 0;
@@ -219,6 +266,25 @@ Fortunately, GCDWebServer does all of this automatically for you:
 - If the app comes back to the foreground and GCDWebServer had been suspended, it will automatically resume itself and start accepting again new HTTP connections as if you had called ```-start```.
 
 HTTP connections are often initiated in batches (or bursts), for instance when loading a web page with multiple resources. This makes it difficult to accurately detect when the *very last* HTTP connection has been closed: it's possible 2 consecutive HTTP connections part of the same batch would be separated by a small delay instead of overlapping. It would be bad for the client if GCDWebServer suspended itself right in between. The ```GCDWebServerOption_ConnectedStateCoalescingInterval``` option solves this problem elegantly by forcing GCDWebServer to wait some extra delay before performing any action after the last HTTP connection has been closed, just in case a new HTTP connection is initiated within this delay.
+
+Debug Builds & Custom Logging
+=============================
+
+When building GCDWebServer in "Debug" mode versus "Release" mode, GCDWebServer logs a lot more information and also performs a number of internal consistency checks. To disable this behavior, make sure to define the preprocessor constant ```NDEBUG``` when compiling GCDWebServer. In Xcode target settings, this can be done by adding ```NDEBUG``` to the build setting ```GCC_PREPROCESSOR_DEFINITIONS``` when building in Release configuration (this is done automatically for you if you use CocoaPods).
+
+It's also possible to replace the logging system used by GCDWebServer by a custom one. Simply define the preprocessor constant ```__GCDWEBSERVER_LOGGING_HEADER__``` to the name of a header file (e.g. "MyLogging.h") that defines these macros:
+
+```
+#define LOG_DEBUG(...)  // Should not do anything if NDEBUG is defined
+#define LOG_VERBOSE(...)
+#define LOG_INFO(...)
+#define LOG_WARNING(...)
+#define LOG_ERROR(...)
+#define LOG_EXCEPTION(__EXCEPTION__)
+
+#define DCHECK(__CONDITION__)  // Should not do anything if NDEBUG is defined or abort if __CONDITION__ is false
+#define DNOT_REACHED()  // Should not do anything if NDEBUG is defined
+```
 
 Advanced Example 1: Implementing HTTP Redirects
 ===============================================
